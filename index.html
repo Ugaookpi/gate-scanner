@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0B6B3A">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="logo.png">
+<title>Ugaoo Gate Scanner</title>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+<style>
+:root{--g:#0B6B3A}
+html,body{margin:0;height:100%;font-family:Arial,Helvetica,sans-serif;background:var(--g);color:#fff;-webkit-user-select:none;user-select:none}
+.scr{position:fixed;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:16px;box-sizing:border-box}
+.on{display:flex}
+.lg{width:64px;height:64px;border-radius:50%;border:3px solid #fff;margin-bottom:12px}
+.t{font-size:38px;font-weight:bold;margin-bottom:12px}.b{font-size:21px;line-height:1.5}.f{margin-top:18px;font-size:15px;opacity:.9}
+input{font-size:22px;padding:10px;width:230px;text-align:center;border-radius:8px;border:0;margin:6px 0;box-sizing:border-box;-webkit-user-select:text;user-select:text}
+button{font-size:19px;padding:11px 24px;border-radius:8px;border:0;background:#fff;color:var(--g);font-weight:bold;margin-top:8px}
+.err{color:#ffd2cc;margin-top:8px;font-size:16px;min-height:20px}
+#scan{justify-content:flex-start;padding-top:max(12px,env(safe-area-inset-top))}
+.head{display:flex;align-items:center;gap:10px;font-size:19px;font-weight:bold;margin-bottom:10px}
+.head img{width:38px;height:38px;border-radius:50%;border:2px solid #fff}
+.cam{position:relative;width:100%;max-width:460px;aspect-ratio:3/4;max-height:62vh;background:#000;border-radius:16px;overflow:hidden}
+.cam video{width:100%;height:100%;object-fit:cover}
+.mirror{transform:scaleX(-1)}
+.box{position:absolute;left:14%;right:14%;top:18%;bottom:18%;border:4px solid #fff;border-radius:18px;box-shadow:0 0 0 999px rgba(0,0,0,.35)}
+.line{position:absolute;left:16%;right:16%;height:3px;background:#5dff9f;top:20%;animation:sc 2s linear infinite;border-radius:2px}
+@keyframes sc{0%{top:20%}50%{top:80%}100%{top:20%}}
+@media (prefers-reduced-motion:reduce){.line{animation:none;top:50%}}
+.hint{margin:12px 0 6px;font-size:20px;font-weight:bold}
+.row{display:flex;gap:8px;justify-content:center;align-items:center;flex-wrap:wrap;margin-top:4px}
+.row input{width:150px;font-size:18px;margin:0}.row button{margin:0;font-size:16px;padding:10px 14px}
+.small{font-size:13px;opacity:.85;margin-top:8px}
+.ghost{background:transparent;color:#fff;border:1px solid #fff;font-size:14px;padding:8px 12px}
+#res .t{font-size:52px}
+</style>
+</head>
+<body>
+
+<div class="scr" id="pin">
+  <img class="lg" src="logo.png" alt="">
+  <div class="t">Gate Login</div>
+  <div class="b">Enter the Gate PIN to start scanning.<br>
+    <input id="p" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN"><br>
+    <input id="n" placeholder="Phone name (e.g. Main Gate)" style="font-size:16px;width:260px"><br>
+    <button id="go">Start scanning</button>
+    <div class="err" id="er"></div>
+  </div>
+  <div class="f">Guard enters the PIN once a day. Staff never need it.</div>
+</div>
+
+<div class="scr" id="scan">
+  <div class="head"><img src="logo.png" alt="">Ugaoo Gate Attendance</div>
+  <div class="cam"><video id="v" playsinline muted autoplay></video><div class="box"></div><div class="line"></div></div>
+  <div class="hint" id="hint">Show your QR card to the camera</div>
+  <div class="row">
+    <button class="ghost" id="flip">Switch camera</button>
+    <input id="mid" placeholder="or type Emp ID" autocapitalize="characters">
+    <button id="mgo">Save</button>
+  </div>
+  <div class="small" id="dev"></div>
+  <button class="ghost" id="lock" style="margin-top:10px">Log out</button>
+</div>
+
+<div class="scr" id="res">
+  <img class="lg" src="logo.png" alt="">
+  <div class="t" id="rt"></div><div class="b" id="rb"></div><div class="f" id="rf"></div>
+</div>
+
+<canvas id="c" style="display:none"></canvas>
+
+<script>
+/* Ugaoo gate scanner: live camera page that saves scans to the Google Sheet through the Apps Script web app. */
+var API = "https://script.google.com/macros/s/AKfycbys37pfvVvmmgRB27Nhy-FnDkTgCeeR4iP-YQgZ_Y_ToZxA1GkMwfar3Itasripn8s3/exec";
+var G = "#0B6B3A", K = "ugaooGateKey", KD = "ugaooGateDay";
+var KEY = "", busy = false, lastId = "", lastAt = 0, stream = null, det = null, timer = null;
+var facing = "user"; // front camera by default (staff see the screen)
+try { facing = localStorage.getItem("ugaooFacing") || "user"; } catch (e) {}
+
+function $(i) { return document.getElementById(i); }
+function today() { var d = new Date(); return d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate(); }
+function gk() { try { return localStorage.getItem(KD) === today() ? (localStorage.getItem(K) || "") : ""; } catch (e) { return ""; } }
+function sk(v) { try { if (v) { localStorage.setItem(K, v); localStorage.setItem(KD, today()); } else { localStorage.removeItem(K); } } catch (e) {} }
+function show(n) { ["pin", "scan", "res"].forEach(function (s) { $(s).className = "scr" + (s === n ? " on" : ""); }); document.body.style.background = G; }
+function api(params) {
+  var q = Object.keys(params).map(function (k) { return k + "=" + encodeURIComponent(params[k]); }).join("&");
+  return fetch(API + "?" + q, { method: "GET", redirect: "follow" }).then(function (r) { return r.json(); });
+}
+KEY = gk();
+
+/* ---------- login ---------- */
+function showPin(msg) { stopLoop(); show("pin"); $("er").textContent = msg || ""; }
+$("go").onclick = function () {
+  $("er").textContent = "Checking…";
+  api({ api: "login", pin: $("p").value, name: $("n").value || "Gate phone" }).then(function (r) {
+    if (!r.ok) { $("er").textContent = r.msg || r.error || "Login failed"; return; }
+    KEY = r.key; sk(r.key); $("p").value = ""; startScan();
+  }).catch(function () { $("er").textContent = "No internet. Check mobile data and try again."; });
+};
+
+/* ---------- scanning ---------- */
+function startScan() {
+  show("scan"); busy = false; $("hint").textContent = "Show your QR card to the camera";
+  api({ api: "check", key: KEY }).then(function (r) {
+    if (!r.ok) { KEY = ""; sk(""); showPin("New day or logged out. Enter the Gate PIN."); }
+    else { $("dev").textContent = "Logged in: " + r.name; }
+  }).catch(function () {});
+  startCam();
+}
+function startCam() {
+  if (stream) { loop(); return; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { camFail("This browser has no camera access. Open the page in Chrome or Safari."); return; }
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 960 } }, audio: false }).then(function (s) {
+    stream = s; var v = $("v"); v.srcObject = s; v.className = facing === "user" ? "mirror" : ""; v.play();
+    if ("BarcodeDetector" in window) { try { det = new BarcodeDetector({ formats: ["qr_code"] }); } catch (e) { det = null; } }
+    loop();
+    try { navigator.wakeLock && navigator.wakeLock.request("screen").catch(function () {}); } catch (e) {}
+  }).catch(function () { camFail("Camera blocked. Tap the aA / lock icon in the address bar and allow Camera, then reload."); });
+}
+function camFail(msg) { $("hint").textContent = msg; }
+function stopCam() { if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; } }
+function stopLoop() { if (timer) { clearTimeout(timer); timer = null; } }
+$("flip").onclick = function () { facing = facing === "user" ? "environment" : "user"; try { localStorage.setItem("ugaooFacing", facing); } catch (e) {} stopCam(); startCam(); };
+
+function loop() { stopLoop(); timer = setTimeout(tick, 200); }
+function tick() {
+  timer = null; var v = $("v");
+  if (busy || $("scan").className.indexOf("on") < 0 || v.readyState < 2) { loop(); return; }
+  if (det) { det.detect(v).then(function (c) { if (c && c.length) got(c[0].rawValue); loop(); }).catch(function () { det = null; loop(); }); return; }
+  if (window.jsQR) {
+    var cv = $("c"), w = v.videoWidth, h = v.videoHeight, s = Math.min(1, 640 / Math.max(w, h));
+    cv.width = w * s | 0; cv.height = h * s | 0;
+    var x = cv.getContext("2d", { willReadFrequently: true }); x.drawImage(v, 0, 0, cv.width, cv.height);
+    var d = x.getImageData(0, 0, cv.width, cv.height);
+    var q = jsQR(d.data, d.width, d.height, { inversionAttempts: "dontInvert" });
+    if (q && q.data) got(q.data);
+  }
+  loop();
+}
+function idFrom(t) { t = String(t || "").trim(); var m = t.match(/[?&]id=([^&#]+)/i); return decodeURIComponent(m ? m[1] : t).trim().toUpperCase(); }
+function got(t) {
+  if (/\/exec\/?$/.test(String(t).trim()) || /gate-scanner/.test(t)) return; // the guard's own red card: ignore
+  var id = idFrom(t); if (!id || id.length > 20) return;
+  var now = Date.now(); if (id === lastId && now - lastAt < 8000) return;
+  lastId = id; lastAt = now; save(id);
+}
+$("mgo").onclick = function () { var id = idFrom($("mid").value); $("mid").value = ""; if (id) { lastId = id; lastAt = Date.now(); save(id); } };
+$("lock").onclick = function () { KEY = ""; sk(""); stopCam(); showPin("Logged out."); };
+
+function beep(ok) {
+  try { var a = new (window.AudioContext || window.webkitAudioContext)(), o = a.createOscillator(), g = a.createGain();
+    o.frequency.value = ok ? 880 : 300; o.connect(g); g.connect(a.destination); g.gain.value = 0.15; o.start(); o.stop(a.currentTime + (ok ? 0.15 : 0.4)); } catch (e) {}
+  try { navigator.vibrate && navigator.vibrate(ok ? 120 : [80, 60, 80]); } catch (e) {}
+}
+function save(id) {
+  if (!KEY) { showPin("Enter the Gate PIN first."); return; }
+  busy = true; show("res"); $("rt").textContent = "Saving…"; $("rb").textContent = id; $("rf").textContent = "";
+  api({ api: "punch", id: id, key: KEY }).then(function (r) {
+    if (r && r.needPin) { KEY = ""; sk(""); showPin("New day or logged out. Enter the Gate PIN."); return; }
+    if (r && r.error) throw new Error(r.error);
+    document.body.style.background = r.color; $("rt").innerHTML = r.title; $("rb").innerHTML = r.body;
+    beep(r.color === "#00B050" || r.color === "#2F75B5"); back(3);
+  }).catch(function (e) {
+    document.body.style.background = "#C00000"; $("rt").textContent = "Not saved";
+    $("rb").textContent = "Check internet and scan again."; beep(false); back(3);
+  });
+}
+function back(n) {
+  $("rf").textContent = "Next scan in " + n + "…";
+  var i = setInterval(function () { n--; if (n <= 0) { clearInterval(i); startScan(); } else { $("rf").textContent = "Next scan in " + n + "…"; } }, 1000);
+}
+/* new day: ask PIN again */
+var DAY = today();
+setInterval(function () { if (today() !== DAY) { DAY = today(); KEY = ""; sk(""); stopCam(); showPin("New day. Please enter the Gate PIN."); } }, 60000);
+
+if (KEY) startScan(); else showPin("");
+</script>
+</body>
+</html>
