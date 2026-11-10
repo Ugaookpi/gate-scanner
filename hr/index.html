@@ -345,10 +345,12 @@ function vToday() {
 }
 
 /* =================== ATTENDANCE =================== */
-function cellOf(e, M, k) {
+function cellOf(e, M, k, cm) {
   var date = M.month + "-" + String(k + 1).padStart(2, "0"), d = e.days, st = d.st[k] || "", wd = WD[pd(date).getDay()], hol = M.hol[k], off = e.wo === wd || !!hol;
   var code = st;
-  if ((st === "P" || st === "HD") && off) code = "WW"; else if (!st && off && activeOn(e, date) && date <= M.today) code = hol ? "H" : "WO";
+  var hrA = cm && cm[e.id + "|" + date] && cm[e.id + "|" + date].code === "A";
+  if ((st === "P" || st === "HD") && off) code = "WW";
+  else if ((!st || (st === "A" && !hrA)) && off && activeOn(e, date) && date <= M.today) code = hol ? "H" : "WO";
   return { date: date, code: code, st: st, inn: d.inn[k], out: d.out[k], ot: d.ot[k], hol: hol, off: off, late: st === "P" && d.inn[k] > LATE && !off };
 }
 function corrMap() { var m = {}; locs().forEach(function (l) { if (S.mon[l]) S.mon[l].corr.forEach(function (c) { m[c.id + "|" + c.date] = c; }); }); return m; }
@@ -358,7 +360,7 @@ function vAttendance() {
   var head = '<tr><th class="nm">Staff</th>'; for (var k = 0; k < M0.days; k++) { var dt = M0.month + "-" + String(k + 1).padStart(2, "0"), w = pd(dt).getDay(); head += '<th class="' + (w === 0 ? "sun" : M0.hol[k] ? "hd" : "") + '" title="' + esc(M0.hol[k] || "") + '">' + (k + 1) + "<br>" + "SMTWTFS"[w] + "</th>"; }
   head += '<th class="n">P</th><th class="n">A</th><th class="n">OT h</th><th class="n">Missed</th></tr>';
   var body = list.map(function (e) { var M = S.mon[e.loc];
-    return '<tr data-id="' + esc(e.id) + '"><td class="nm"><b>' + esc(e.name) + '</b><br><span class="id">' + esc(e.id) + locTag(e) + (e.left ? " · left" : "") + "</span></td>" + e.days.st.map(function (x, k) { var c = cellOf(e, M, k), ed = cm[e.id + "|" + c.date];
+    return '<tr data-id="' + esc(e.id) + '"><td class="nm"><b>' + esc(e.name) + '</b><br><span class="id">' + esc(e.id) + locTag(e) + (e.left ? " · left" : "") + "</span></td>" + e.days.st.map(function (x, k) { var c = cellOf(e, M, k, cm), ed = cm[e.id + "|" + c.date];
       var tip = (c.inn ? c.inn + " – " + (c.out || "no OUT") : (c.hol || NAMES[c.code] || "")) + (ed ? " · Corrected: " + ed.reason : "");
       return '<td><span class="c ' + (c.code || "NA") + (c.late ? " late" : "") + (ed ? " ed" : "") + '" data-date="' + c.date + '" title="' + esc(tip) + '">' + lab[c.code] + "</span></td>"; }).join("") +
       '<td class="sum n">' + (e.sum.P + e.sum.HD * 0.5) + '</td><td class="sum n">' + e.sum.A + '</td><td class="sum n">' + e.sum.OT + '</td><td class="sum n' + (e.sum.MP ? " neg" : "") + '">' + e.sum.MP + "</td></tr>"; }).join("");
@@ -442,7 +444,7 @@ function openEmp(id, editKey) {
   var e = null; emps(S.mon).forEach(function (x) { if (x.id === id) e = x; }); if (!e) { closeEmp(); toast("Not found in this month", true); return; }
   var M = S.mon[e.loc], p = e.pay, cm = corrMap(), today = M.today, rows = "";
   for (var k = e.days.st.length - 1; k >= 0; k--) {
-    var c = cellOf(e, M, k), ed = cm[e.id + "|" + c.date];
+    var c = cellOf(e, M, k, cm), ed = cm[e.id + "|" + c.date];
     if (c.date > today) continue;
     if (c.date === editKey) { rows += editorRow(e, c, ed); continue; }
     rows += "<tr><td>" + dl(c.date) + '</td><td><span class="pill ' + (PILL[c.code] || "wo") + '">' + esc(NAMES[c.code] || c.code || "—") + (c.late ? " · late" : "") + "</span>" + (ed ? ' <span class="pill ed" title="' + esc(ed.reason) + '">✎ ' + esc(ed.reason) + "</span>" : "") + '</td><td class="n">' + (c.inn || "–") + '</td><td class="n">' + (c.out || "–") + '</td><td class="n">' + (c.ot || "–") + '</td><td class="n">' + (activeOn(e, c.date) ? '<button class="ghost sm" data-edit="' + c.date + '">Edit</button>' : "") + "</td></tr>";
