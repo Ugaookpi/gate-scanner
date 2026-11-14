@@ -171,6 +171,7 @@ tr.gone td{color:var(--muted)}
 .loading{padding:40px 0;color:var(--muted);text-align:center}
 .spin{display:inline-block;width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--brand);border-radius:50%;animation:sp 0.8s linear infinite;vertical-align:-3px;margin-right:8px}
 @keyframes sp{to{transform:rotate(360deg)}}
+.vo{background:#fff;color:var(--brand);border-radius:4px;padding:0 5px;font-weight:700}
 .hbtn{background:rgba(255,255,255,.14);color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:8px;padding:6px 10px;font:600 12.5px var(--f-body);cursor:pointer}
 button:disabled{opacity:.55;cursor:wait}
 .small{font-size:12px;color:var(--muted)}
@@ -194,9 +195,9 @@ var NAMES = { P: "Present", HD: "Half day", L: "Paid leave", A: "Absent", MP: "M
 var PILL = { P: "in", HD: "late", L: "out", A: "abs", MP: "mp", WO: "wo", H: "wo", WW: "in", "": "wo" };
 
 /* =================== state =================== */
-var S = { keys: {}, name: "", loc: "ALL", month: "", q: "", dept: "", today: {}, mon: {}, warn: {}, bulk: false, addStaff: false, newCard: null, leaving: null, busy: false };
-try { var sv = JSON.parse(localStorage.getItem("ugaooHR") || "{}"); S.keys = sv.keys || {}; S.name = sv.name || ""; if (sv.loc) S.loc = sv.loc; } catch (e) {}
-function saveLocal() { try { localStorage.setItem("ugaooHR", JSON.stringify({ keys: S.keys, name: S.name, loc: S.loc })); } catch (e) {} }
+var S = { keys: {}, roles: {}, name: "", loc: "ALL", month: "", q: "", dept: "", today: {}, mon: {}, warn: {}, bulk: false, addStaff: false, newCard: null, leaving: null, busy: false };
+try { var sv = JSON.parse(localStorage.getItem("ugaooHR") || "{}"); S.keys = sv.keys || {}; S.roles = sv.roles || {}; S.name = sv.name || ""; if (sv.loc) S.loc = sv.loc; } catch (e) {}
+function saveLocal() { try { localStorage.setItem("ugaooHR", JSON.stringify({ keys: S.keys, roles: S.roles, name: S.name, loc: S.loc })); } catch (e) {} }
 
 /* =================== helpers =================== */
 function $(s, r) { return (r || document).querySelector(s); }
@@ -210,6 +211,9 @@ function t12(t) { if (!t) return "–"; var h = +t.slice(0, 2); return (h % 12 |
 function mins(t) { return t ? +t.slice(0, 2) * 60 + +t.slice(3, 5) : null; }
 function hhmm(m) { return String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0"); }
 function locs() { return ["GGN", "KOL"].filter(function (l) { return S.keys[l] && (S.loc === "ALL" || S.loc === l); }); }
+/* view-only login (warehouse PIN): attendance only, nothing can be changed */
+function VIEW() { return logged().some(function (l) { return S.roles[l] === "view"; }); }
+function haveMon(l) { return !!S.mon[l] && (VIEW() || S.mon[l].month === S.month); }
 function logged() { return ["GGN", "KOL"].filter(function (l) { return S.keys[l]; }); }
 function toast(t, bad) { var el = document.createElement("div"); el.className = "toast"; if (bad) el.style.background = "var(--bad)"; el.textContent = t; document.body.appendChild(el); setTimeout(function () { el.remove(); }, bad ? 5000 : 2600); }
 function thisMonth() { return isoD(new Date()).slice(0, 7); }
@@ -230,9 +234,9 @@ function call(loc, params) {
 function showLogin(msg) {
   closeEmp();
   $("#app").innerHTML = '<div class="login"><form class="lcard" id="lf"><img src="' + LOGO + '" alt="Ugaoo"><h1>HR Dashboard</h1><p>Ugaoo Agritech · Off-role attendance &amp; salary</p>' +
-    '<input id="lpin" type="password" inputmode="numeric" autocomplete="off" placeholder="HR PIN" required>' +
+    '<input id="lpin" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN" required>' +
     '<input id="lname" type="text" placeholder="Your name (shown in change log)" value="' + esc(S.name) + '" style="font-size:15px">' +
-    '<button class="pri" type="submit" id="lgo">Log in</button><div class="err" id="lerr">' + esc(msg || "") + '</div><p class="small">Only for HR. Guards use the Gate Scanner, not this page.</p></form></div>';
+    '<button class="pri" type="submit" id="lgo">Log in</button><div class="err" id="lerr">' + esc(msg || "") + '</div><p class="small">HR PIN to manage, or your warehouse PIN to view attendance. Guards use the Gate Scanner, not this page.</p></form></div>';
   $("#lpin").focus();
   $("#lf").onsubmit = function (ev) {
     ev.preventDefault(); var pin = $("#lpin").value.trim(), name = $("#lname").value.trim() || "HR";
@@ -240,10 +244,11 @@ function showLogin(msg) {
     var warn = {};
     Promise.all(["GGN", "KOL"].map(function (l) {
       return fetch(APIS[l] + "?api=hr_login&pin=" + encodeURIComponent(pin) + "&name=" + encodeURIComponent(name), { redirect: "follow" }).then(function (r) { return r.json(); })
-        .then(function (r) { if (r.ok) S.keys[l] = r.key; else warn[l] = r.msg || r.error || "Login failed"; }, function () { warn[l] = "Could not reach the sheet"; });
+        .then(function (r) { if (r.ok) { S.keys[l] = r.key; S.roles[l] = r.role || "hr"; } else warn[l] = r.msg || r.error || "Login failed"; }, function () { warn[l] = "Could not reach the sheet"; });
     })).then(function () {
       $("#lgo").disabled = false;
       if (!logged().length) { $("#lerr").textContent = warn.GGN || warn.KOL; return; }
+      if (VIEW()) warn = {};
       S.name = name; S.warn = warn; S.today = {}; S.mon = {}; saveLocal(); boot();
     });
   };
@@ -251,11 +256,11 @@ function showLogin(msg) {
 
 /* =================== data =================== */
 function need(view) {
-  var L = locs(), miss = L.filter(function (l) { return view === "today" ? !S.today[l] : !(S.mon[l] && S.mon[l].month === S.month); });
+  var L = locs(), miss = L.filter(function (l) { return view === "today" ? !S.today[l] : !haveMon(l); });
   if (!miss.length) return Promise.resolve();
   return Promise.all(miss.map(function (l) {
     return (view === "today" ? call(l, { api: "hr_today" }) : call(l, { api: "hr_month", month: S.month })).then(function (r) {
-      r.emps.forEach(function (e) { e.loc = l; }); if (view === "today") S.today[l] = r; else S.mon[l] = r; delete S.warn[l];
+      r.emps.forEach(function (e) { e.loc = l; }); if (view === "today") S.today[l] = r; else { S.mon[l] = r; if (VIEW()) S.month = r.month; } delete S.warn[l];
     }, function (e) { S.warn[l] = e.message; });
   }));
 }
@@ -270,31 +275,31 @@ function boot() {
   if (S.loc !== "ALL" && !S.keys[S.loc]) S.loc = "ALL";
   var mo = [], d = new Date(); d.setDate(1);
   for (var i = 0; i < 7; i++) { var k = isoD(d).slice(0, 7); mo.push('<option value="' + k + '">' + d.toLocaleString("en-GB", { month: "long", year: "numeric" }) + "</option>"); d.setMonth(d.getMonth() - 1); }
-  var both = logged().length === 2;
-  $("#app").innerHTML = '<header class="top"><div class="wrap bar"><div class="brand"><img src="' + LOGO + '" alt="Ugaoo"><div><b>Attendance Desk</b><small>Ugaoo Agritech Pvt Ltd · Off-role staff</small></div></div>' +
+  var both = logged().length === 2, vo = VIEW();
+  $("#app").innerHTML = '<header class="top"><div class="wrap bar"><div class="brand"><img src="' + LOGO + '" alt="Ugaoo"><div><b>Attendance Desk</b><small>Ugaoo Agritech Pvt Ltd · Off-role staff' + (vo ? ' · <span class="vo">View only</span>' : '') + '</small></div></div>' +
     '<div class="seg" role="group" aria-label="Location">' + (both ? '<button data-loc="ALL">Both</button>' : "") + logged().map(function (l) { return '<button data-loc="' + l + '">' + LOCN[l] + "</button>"; }).join("") + "</div>" +
-    '<select id="month" aria-label="Salary month">' + mo.join("") + '</select><button class="hbtn" id="refresh" title="Load the latest from the sheets">↻ Refresh</button><button class="hbtn" id="logout">Log out</button></div></header>' +
-    '<nav class="tabs" aria-label="Sections"><div class="wrap"><a href="#today" data-v="today">Today</a><a href="#attendance" data-v="attendance">Attendance</a><a href="#salary" data-v="salary">Salary</a><a href="#advances" data-v="advances">Advances</a><a href="#staff" data-v="staff">Staff</a></div></nav>' +
+    (vo ? '' : '<select id="month" aria-label="Salary month">' + mo.join("") + '</select>') + '<button class="hbtn" id="refresh" title="Load the latest from the sheets">↻ Refresh</button><button class="hbtn" id="logout">Log out</button></div></header>' +
+    '<nav class="tabs" aria-label="Sections"><div class="wrap"><a href="#today" data-v="today">Today</a><a href="#attendance" data-v="attendance">Attendance</a>' + (vo ? '' : '<a href="#salary" data-v="salary">Salary</a><a href="#advances" data-v="advances">Advances</a><a href="#staff" data-v="staff">Staff</a>') + '</div></nav>' +
     '<div class="wrap"><div id="warns"></div><main id="view"></main></div>';
   document.querySelectorAll(".seg button").forEach(function (b) { b.onclick = function () { S.loc = b.dataset.loc; S.dept = ""; saveLocal(); render(); }; });
-  $("#month").value = S.month;
-  $("#month").onchange = function () { S.month = this.value; render(); };
+  if ($("#month")) $("#month").value = S.month;
+  if ($("#month")) $("#month").onchange = function () { S.month = this.value; render(); };
   $("#refresh").onclick = function () { reload(); };
-  $("#logout").onclick = function () { S.keys = {}; saveLocal(); showLogin("Logged out."); };
+  $("#logout").onclick = function () { S.keys = {}; S.roles = {}; saveLocal(); showLogin("Logged out."); };
   $("#view").addEventListener("click", onViewClick);
   render();
 }
 var VIEWS = { today: vToday, attendance: vAttendance, salary: vSalary, advances: vAdvances, staff: vStaff };
-function cur() { var h = location.hash.replace("#", ""); return VIEWS[h] ? h : "today"; }
+function cur() { var h = location.hash.replace("#", ""); return VIEWS[h] && (!VIEW() || h === "today" || h === "attendance") ? h : "today"; }
 var renderSeq = 0;
 function render() {
   if (!$("#view")) return;
   var v = cur(), seq = ++renderSeq;
   document.querySelectorAll("nav.tabs a").forEach(function (a) { if (a.dataset.v === v) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
   document.querySelectorAll(".seg button").forEach(function (b) { b.setAttribute("aria-pressed", b.dataset.loc === S.loc); });
-  $("#month").disabled = v === "today";
-  var hasData = v === "today" ? locs().every(function (l) { return S.today[l]; }) : locs().every(function (l) { return S.mon[l] && S.mon[l].month === S.month; });
-  if (!hasData) $("#view").innerHTML = '<div class="loading"><span class="spin"></span>Loading from Google Sheets…' + (v !== "today" ? '<div class="small" style="margin-top:6px">Opening a month also sets it as the Salary month in the sheet.</div>' : "") + "</div>";
+  if ($("#month")) $("#month").disabled = v === "today";
+  var hasData = v === "today" ? locs().every(function (l) { return S.today[l]; }) : locs().every(haveMon);
+  if (!hasData) $("#view").innerHTML = '<div class="loading"><span class="spin"></span>Loading from Google Sheets…' + (v !== "today" && !VIEW() ? '<div class="small" style="margin-top:6px">Opening a month also sets it as the Salary month in the sheet.</div>' : "") + "</div>";
   return need(v === "today" ? "today" : "month").then(function () {
     if (seq !== renderSeq) return;
     $("#warns").innerHTML = Object.keys(S.warn).filter(function (l) { return S.warn[l]; }).map(function (l) { return '<div class="warnbar"><b>' + LOCN[l] + ":</b> " + esc(S.warn[l]) + "</div>"; }).join("");
@@ -341,7 +346,7 @@ function vToday() {
     '<div class="kpis">' + kpi("On roll", onRoll, S.loc === "ALL" ? "Both locations" : LOCN[S.loc], "") + kpi("Present", present, onRoll ? Math.round(present / onRoll * 100) + "% of staff" : "", "ok") + kpi("Inside now", inside, "Scanned IN, no OUT yet", "info") + kpi("Late (after 9:15)", late, "Arrived after grace", "warn") + kpi("Not in today", notIn.length, off ? off + " on week off/holiday" : "Absent or on leave", "bad") + "</div>" +
     '<div class="grid2"><section class="panel"><h2>Gate feed</h2>' + (feed.length ? '<ul class="feed">' + feed.slice(0, 25).map(function (f) { var p = f.p, lt = p.type === "IN" && p.t > LATE && !f.off; return '<li data-id="' + esc(p.id) + '" data-date="' + k + '"><time>' + p.t + '</time><div class="who"><b>' + esc(p.name) + "</b><small>" + esc(p.id) + (p.by.indexOf("HR:") === 0 ? " · added by HR" : " · " + esc(p.by)) + (S.loc === "ALL" ? " · " + LOCN[f.loc] : "") + '</small></div><span class="pill ' + (p.type === "IN" ? (lt ? "late" : "in") : "out") + '">' + esc(p.type) + (lt ? " · LATE" : "") + "</span></li>"; }).join("") + "</ul>" : '<p class="empty">No scans yet today.</p>') +
     '</section><div style="display:flex;flex-direction:column;gap:16px;min-width:0"><section class="panel chart"><h2>Arrivals by time</h2>' + svg + '<p class="note">Amber bars are arrivals after the 9:15 grace time.</p></section>' +
-    '<section class="panel"><h2>Not in today (' + notIn.length + ")</h2>" + (notIn.length ? '<div class="chips">' + notIn.map(function (n) { return '<button class="chip" data-id="' + esc(n.e.id) + '" data-date="' + k + '">' + esc(n.e.name) + ' <span class="pill ' + (n.code === "L" ? "out" : "abs") + '">' + (n.code === "L" ? "LEAVE" : "NO SCAN") + "</span></button>"; }).join("") + '</div><p class="note">Tap a name to mark leave, or add their times if the scanner missed them.</p>' : '<p class="empty">Everyone expected today has scanned in.</p>') + "</section></div></div>";
+    '<section class="panel"><h2>Not in today (' + notIn.length + ")</h2>" + (notIn.length ? '<div class="chips">' + notIn.map(function (n) { return '<button class="chip" data-id="' + esc(n.e.id) + '" data-date="' + k + '">' + esc(n.e.name) + ' <span class="pill ' + (n.code === "L" ? "out" : "abs") + '">' + (n.code === "L" ? "LEAVE" : "NO SCAN") + "</span></button>"; }).join("") + '</div><p class="note">' + (VIEW() ? 'Tap a name to see their days this month.' : 'Tap a name to mark leave, or add their times if the scanner missed them.') + '</p>' : '<p class="empty">Everyone expected today has scanned in.</p>') + "</section></div></div>";
 }
 
 /* =================== ATTENDANCE =================== */
@@ -364,9 +369,9 @@ function vAttendance() {
       var tip = (c.inn ? c.inn + " – " + (c.out || "no OUT") : (c.hol || NAMES[c.code] || "")) + (ed ? " · Corrected: " + ed.reason : "");
       return '<td><span class="c ' + (c.code || "NA") + (c.late ? " late" : "") + (ed ? " ed" : "") + '" data-date="' + c.date + '" title="' + esc(tip) + '">' + lab[c.code] + "</span></td>"; }).join("") +
       '<td class="sum n">' + (e.sum.P + e.sum.HD * 0.5) + '</td><td class="sum n">' + e.sum.A + '</td><td class="sum n">' + e.sum.OT + '</td><td class="sum n' + (e.sum.MP ? " neg" : "") + '">' + e.sum.MP + "</td></tr>"; }).join("");
-  return '<div class="vhead"><div><h1>Attendance · ' + pd(M0.month + "-01").toLocaleString("en-GB", { month: "long", year: "numeric" }) + "</h1><p>" + list.length + ' staff · from gate scans. Tap any day to correct it.</p></div><div class="tools">' + filters(all) + '<button class="ghost" data-act="bulk">Scanner was down?</button></div></div>' + bulkPanel() +
+  return '<div class="vhead"><div><h1>Attendance · ' + pd(M0.month + "-01").toLocaleString("en-GB", { month: "long", year: "numeric" }) + "</h1><p>" + list.length + ' staff · from gate scans. Tap any day to ' + (VIEW() ? 'see the times' : 'correct it') + '.</p></div><div class="tools">' + filters(all) + (VIEW() ? '' : '<button class="ghost" data-act="bulk">Scanner was down?</button>') + '</div></div>' + (VIEW() ? '' : bulkPanel()) +
     '<div class="scroll" style="max-height:70vh"><table class="mgrid"><thead>' + head + "</thead><tbody>" + (body || '<tr><td class="nm">No staff match.</td></tr>') + "</tbody></table></div>" +
-    '<div class="legend"><span><i class="c P">P</i>Present</span><span><i class="c HD">½</i>Half day</span><span><i class="c L">L</i>Paid leave</span><span><i class="c A">A</i>Absent</span><span><i class="c WO">WO</i>Week off</span><span><i class="c H">H</i>Holiday</span><span><i class="c WW">2×</i>Worked off day (double pay)</span><span><i class="c MP">?</i>Missed OUT scan</span><span><i class="c P late">P</i>Late</span><span><i class="c P ed">P</i>Corrected</span></div>' + changeLog();
+    '<div class="legend"><span><i class="c P">P</i>Present</span><span><i class="c HD">½</i>Half day</span><span><i class="c L">L</i>Paid leave</span><span><i class="c A">A</i>Absent</span><span><i class="c WO">WO</i>Week off</span><span><i class="c H">H</i>Holiday</span><span><i class="c WW">2×</i>Worked off day (double pay)</span><span><i class="c MP">?</i>Missed OUT scan</span><span><i class="c P late">P</i>Late</span><span><i class="c P ed">P</i>Corrected</span></div>' + (VIEW() ? '' : changeLog());
 }
 function bulkPanel() {
   if (!S.bulk) return "";
@@ -437,21 +442,22 @@ function cardHtml(c) {
 /* =================== drawer: one person, day by day =================== */
 var openId = null, openEdit = null;
 function openEmp(id, editKey) {
+  if (VIEW()) editKey = null;
   if (editKey && editKey.slice(0, 7) !== S.month) { S.month = editKey.slice(0, 7); $("#month").value = S.month; }
   openId = id; openEdit = editKey || null;
-  var L = locs(), miss = L.filter(function (l) { return !(S.mon[l] && S.mon[l].month === S.month); });
+  var L = locs(), miss = L.filter(function (l) { return !haveMon(l); });
   if (miss.length) { $("#layer").innerHTML = '<div class="scrim" id="scrim"></div><aside class="drawer"><div class="loading"><span class="spin"></span>Loading…</div></aside>'; need("month").then(function () { if (openId === id) openEmp(id, editKey); if (cur() !== "today") render(); }); return; }
   var e = null; emps(S.mon).forEach(function (x) { if (x.id === id) e = x; }); if (!e) { closeEmp(); toast("Not found in this month", true); return; }
-  var M = S.mon[e.loc], p = e.pay, cm = corrMap(), today = M.today, rows = "";
+  var M = S.mon[e.loc], p = e.pay || {}, cm = corrMap(), today = M.today, rows = "";
   for (var k = e.days.st.length - 1; k >= 0; k--) {
     var c = cellOf(e, M, k, cm), ed = cm[e.id + "|" + c.date];
     if (c.date > today) continue;
     if (c.date === editKey) { rows += editorRow(e, c, ed); continue; }
-    rows += "<tr><td>" + dl(c.date) + '</td><td><span class="pill ' + (PILL[c.code] || "wo") + '">' + esc(NAMES[c.code] || c.code || "—") + (c.late ? " · late" : "") + "</span>" + (ed ? ' <span class="pill ed" title="' + esc(ed.reason) + '">✎ ' + esc(ed.reason) + "</span>" : "") + '</td><td class="n">' + (c.inn || "–") + '</td><td class="n">' + (c.out || "–") + '</td><td class="n">' + (c.ot || "–") + '</td><td class="n">' + (activeOn(e, c.date) ? '<button class="ghost sm" data-edit="' + c.date + '">Edit</button>' : "") + "</td></tr>";
+    rows += "<tr><td>" + dl(c.date) + '</td><td><span class="pill ' + (PILL[c.code] || "wo") + '">' + esc(NAMES[c.code] || c.code || "—") + (c.late ? " · late" : "") + "</span>" + (ed ? ' <span class="pill ed" title="' + esc(ed.reason) + '">✎ ' + esc(ed.reason) + "</span>" : "") + '</td><td class="n">' + (c.inn || "–") + '</td><td class="n">' + (c.out || "–") + '</td><td class="n">' + (c.ot || "–") + '</td><td class="n">' + (activeOn(e, c.date) && !VIEW() ? '<button class="ghost sm" data-edit="' + c.date + '">Edit</button>' : "") + "</td></tr>";
   }
   $("#layer").innerHTML = '<div class="scrim" id="scrim"></div><aside class="drawer" role="dialog" aria-modal="true" aria-label="' + esc(e.name) + '"><div class="dhead"><img src="' + LOGO + '" alt="" style="width:40px;height:40px;border-radius:50%"><div><h2>' + esc(e.name) + "</h2><p>" + esc(e.id) + " · " + esc(e.role) + " · " + esc(e.dept) + " · " + LOCN[e.loc] + '</p></div><button class="x" id="xbtn" aria-label="Close">×</button></div>' +
-    '<div class="slip"><span>Monthly salary</span><span class="r">' + inr(e.sal) + "</span><span>Per day</span><span class=\"r\">" + inr(p.perDay) + "</span><span>Paid days</span><span class=\"r\">" + p.payable + "</span><span>Earned</span><span class=\"r\">" + inr(p.earned) + "</span><span>Off-day work extra (" + (e.sum.WOW + e.sum.HW) + ' days)</span><span class="r">' + inr(p.extra) + "</span><span>Overtime (" + p.otHrs + " h × ₹" + p.otRate + ')</span><span class="r">' + inr(p.otAmt) + '</span><span>Advance & deductions</span><span class="r neg">' + (p.adv + p.other ? "−" + inr(p.adv + p.other) : "–") + '</span><span class="t">Net pay</span><span class="t r net">' + inr(p.net) + "</span></div>" +
-    '<h2>Day by day · ' + pd(M.month + "-01").toLocaleString("en-GB", { month: "long" }) + '</h2><p class="note" style="margin-top:-4px">Scanner missed them or the time is wrong? Tap Edit on that day. It saves to the sheet and pay updates.</p><div class="scroll"><table><thead><tr><th>Date</th><th>Status</th><th class="n">IN</th><th class="n">OUT</th><th class="n">OT h</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="6">No days yet.</td></tr>') + "</tbody></table></div></aside>";
+    (VIEW() ? '' : '<div class="slip"><span>Monthly salary</span><span class="r">' + inr(e.sal) + "</span><span>Per day</span><span class=\"r\">" + inr(p.perDay) + "</span><span>Paid days</span><span class=\"r\">" + p.payable + "</span><span>Earned</span><span class=\"r\">" + inr(p.earned) + "</span><span>Off-day work extra (" + (e.sum.WOW + e.sum.HW) + ' days)</span><span class="r">' + inr(p.extra) + "</span><span>Overtime (" + p.otHrs + " h × ₹" + p.otRate + ')</span><span class="r">' + inr(p.otAmt) + '</span><span>Advance & deductions</span><span class="r neg">' + (p.adv + p.other ? "−" + inr(p.adv + p.other) : "–") + '</span><span class="t">Net pay</span><span class="t r net">' + inr(p.net) + "</span></div>") +
+    '<h2>Day by day · ' + pd(M.month + "-01").toLocaleString("en-GB", { month: "long" }) + '</h2><p class="note" style="margin-top:-4px">' + (VIEW() ? 'View only. If a day looks wrong, tell HR to correct it.' : 'Scanner missed them or the time is wrong? Tap Edit on that day. It saves to the sheet and pay updates.') + '</p><div class="scroll"><table><thead><tr><th>Date</th><th>Status</th><th class="n">IN</th><th class="n">OUT</th><th class="n">OT h</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="6">No days yet.</td></tr>') + "</tbody></table></div></aside>";
   $("#scrim").onclick = $("#xbtn").onclick = closeEmp;
   var st = $("#edst"); if (st) { st.closest("tr").scrollIntoView({ block: "center" }); st.focus(); syncTimes(); st.onchange = syncTimes; } else $("#xbtn").focus();
 }
@@ -482,6 +488,7 @@ $("#layer").addEventListener("submit", function (ev) {
 
 /* =================== writes =================== */
 function write(loc, params, okMsg, formEl, after) {
+  if (VIEW()) { toast("View-only login. Ask HR to make changes.", true); return; }
   if (S.busy) return; S.busy = true;
   var btns = formEl ? formEl.querySelectorAll("button") : []; btns.forEach(function (b) { b.disabled = true; });
   toast("Saving…");
